@@ -7,11 +7,13 @@ Run with:
 """
 
 import math
+import re
 from pathlib import Path
 
 import pytest
 import torch
 import torch.nn.functional as F
+from safetensors.torch import load_file
 from flashinfer.gdn_decode import gated_delta_rule_mtp
 from flashinfer.utils import get_compute_capability
 
@@ -19,6 +21,100 @@ from flashinfer_bench.data import Definition, load_json_file
 
 # Paths
 DEFINITIONS_DIR = Path(__file__).parent.parent.parent / "definitions"
+WORKLOAD_INPUTS = {
+    "q": {"type": "random"},
+    "k": {"type": "random"},
+    "v": {"type": "random"},
+    "initial_state": {"type": "random"},
+    "initial_state_indices": {
+        "type": "safetensors",
+        "path": "./blob/workloads/gdn/gdn_mtp_qk4_v8_d128_k_last_c0be516f-fa4d-4baf-bdb2-162393e7a51f.safetensors",
+        "tensor_key": "initial_state_indices",
+    },
+    "A_log": {
+        "type": "safetensors",
+        "path": "./blob/workloads/gdn/gdn_mtp_qk4_v8_d128_k_last_c0be516f-fa4d-4baf-bdb2-162393e7a51f.safetensors",
+        "tensor_key": "A_log",
+    },
+    "a": {
+        "type": "safetensors",
+        "path": "./blob/workloads/gdn/gdn_mtp_qk4_v8_d128_k_last_c0be516f-fa4d-4baf-bdb2-162393e7a51f.safetensors",
+        "tensor_key": "a",
+    },
+    "dt_bias": {
+        "type": "safetensors",
+        "path": "./blob/workloads/gdn/gdn_mtp_qk4_v8_d128_k_last_c0be516f-fa4d-4baf-bdb2-162393e7a51f.safetensors",
+        "tensor_key": "dt_bias",
+    },
+    "b": {
+        "type": "safetensors",
+        "path": "./blob/workloads/gdn/gdn_mtp_qk4_v8_d128_k_last_c0be516f-fa4d-4baf-bdb2-162393e7a51f.safetensors",
+        "tensor_key": "b",
+    },
+    "scale": {"type": "scalar", "value": 0.08838834764831843},
+    "intermediate_states_buffer": {
+        "type": "safetensors",
+        "path": "./blob/workloads/gdn/gdn_mtp_qk4_v8_d128_k_last_c0be516f-fa4d-4baf-bdb2-162393e7a51f.safetensors",
+        "tensor_key": "intermediate_states_buffer",
+    },
+}
+WORKLOAD_AXES = {"batch_size": 41, "seq_len": 4, "pool_size": 49}
+
+
+def _resolve_real_safetensors_path(workload_path: str) -> Path:
+    """Resolve the real safetensors path from the workload path UUID."""
+    match = re.search(
+        r"gdn_mtp_qk4_v8_d128_k_last_([0-9a-f-]+)\.safetensors", workload_path
+    )
+    if not match:
+        raise ValueError(f"Unable to extract UUID from workload path: {workload_path}")
+    uuid = match.group(1)
+    return Path("/home/averyh/sglang/tmp") / f"gdn_mtp_qk4_v8_d128_k_last_{uuid}.safetensors"
+
+
+def load_workload_inputs(device: str = "cuda"):
+    """Load workload tensors from the real safetensors file."""
+    any_path = next(
+        spec["path"] for spec in WORKLOAD_INPUTS.values() if spec["type"] == "safetensors"
+    )
+    real_path = _resolve_real_safetensors_path(any_path)
+    tensors = load_file(str(real_path), device="cpu")
+
+    batch_size = WORKLOAD_AXES["batch_size"]
+    seq_len = WORKLOAD_AXES["seq_len"]
+    pool_size = WORKLOAD_AXES["pool_size"]
+    num_q_heads = 4
+    num_k_heads = 4
+    num_v_heads = 8
+    head_size = 128
+
+    inputs = {}
+    for key, spec in WORKLOAD_INPUTS.items():
+        if spec["type"] == "scalar":
+            inputs[key] = float(spec["value"])
+            continue
+        if spec["type"] == "safetensors":
+            inputs[key] = tensors[spec["tensor_key"]].to(device)
+            continue
+
+        if key == "q":
+            shape = (batch_size, seq_len, num_q_heads, head_size)
+            dtype = torch.bfloat16
+        elif key == "k":
+            shape = (batch_size, seq_len, num_k_heads, head_size)
+            dtype = torch.bfloat16
+        elif key == "v":
+            shape = (batch_size, seq_len, num_v_heads, head_size)
+            dtype = torch.bfloat16
+        elif key == "initial_state":
+            shape = (pool_size, num_v_heads, head_size, head_size)
+            dtype = torch.float32
+        else:
+            raise ValueError(f"Unexpected random input key: {key}")
+
+        inputs[key] = torch.randn(*shape, dtype=dtype, device=device) * 0.1
+
+    return inputs
 
 
 def load_definition(name: str) -> Definition:
@@ -56,6 +152,7 @@ def run_kernel(
     dt_bias,
     b,
     scale,
+    intermediate_states_buffer=None,
     cache_intermediate=True,
 ):
     """Run FlashInfer MTP kernel."""
@@ -68,9 +165,10 @@ def run_kernel(
 
     # Intermediate states buffer (optional)
     if cache_intermediate:
-        intermediate_states_buffer = torch.zeros(
-            pool_size, T, num_v_heads, K, K, dtype=torch.float32, device=q.device
-        )
+        if intermediate_states_buffer is None:
+            intermediate_states_buffer = torch.zeros(
+                pool_size, T, num_v_heads, K, K, dtype=torch.float32, device=q.device
+            )
     else:
         intermediate_states_buffer = None
 
@@ -164,7 +262,9 @@ def test_correctness(batch_size=2, seq_len=4, atol=5e-3, rtol=5e-3):
     run = compile_reference(definition.reference)
 
     device = "cuda"
-    inputs = generate_random_inputs(batch_size=batch_size, seq_len=seq_len, device=device)
+    inputs = load_workload_inputs(device=device)
+    batch_size = inputs["q"].shape[0]
+    seq_len = inputs["q"].shape[1]
 
     # Run reference from definition
     print("Running reference implementation from definition...")
@@ -179,7 +279,7 @@ def test_correctness(batch_size=2, seq_len=4, atol=5e-3, rtol=5e-3):
         inputs["dt_bias"].clone(),
         inputs["b"].clone(),
         inputs["scale"],
-        None,  # intermediate_states_buffer
+        inputs.get("intermediate_states_buffer"),
     )
     ref_output, ref_final_state = ref_result
 
@@ -196,7 +296,8 @@ def test_correctness(batch_size=2, seq_len=4, atol=5e-3, rtol=5e-3):
         inputs["dt_bias"].clone(),
         inputs["b"].clone(),
         inputs["scale"],
-        cache_intermediate=True,
+        intermediate_states_buffer=inputs.get("intermediate_states_buffer"),
+        cache_intermediate=True if "intermediate_states_buffer" in inputs else False,
     )
 
     # Compare outputs
