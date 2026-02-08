@@ -2,8 +2,13 @@
 Test GDN prefill k-last reference implementation against FlashInfer kernel.
 
 Run with:
+<<<<<<<< HEAD:flashinfer_trace/tests/references/test_gdn_prefill_qk8_v16_d128_k_last.py
     pytest test_gdn_prefill_qk8_v16_d128_k_last.py -v
     python test_gdn_prefill_qk8_v16_d128_k_last.py
+========
+    pytest test_gdn_prefill_qk4_v8_d128_k_last.py -v
+    python test_gdn_prefill_qk4_v8_d128_k_last.py
+>>>>>>>> c416aa3747153fc94a0e906e82e0ac31c82b5905:flashinfer_trace/tests/references/test_gdn_prefill_qk4_v8_d128_k_last.py
 """
 
 import math
@@ -66,6 +71,14 @@ def compute_gates(A_log, a, dt_bias, b):
     return g, beta
 
 
+<<<<<<<< HEAD:flashinfer_trace/tests/references/test_gdn_prefill_qk8_v16_d128_k_last.py
+========
+# Load definition and compile reference
+definition = load_definition("gdn_prefill_qk4_v8_d128_k_last")
+reference_gdn_prefill = compile_reference(definition.reference)
+
+
+>>>>>>>> c416aa3747153fc94a0e906e82e0ac31c82b5905:flashinfer_trace/tests/references/test_gdn_prefill_qk4_v8_d128_k_last.py
 @requires_cuda
 @requires_sm90_only
 @pytest.mark.parametrize("batch_size", [1, 2, 4])
@@ -80,9 +93,15 @@ def test_gdn_prefill_correctness(batch_size: int, seq_len: int):
     device = torch.device("cuda")
     dtype = torch.bfloat16
 
+<<<<<<<< HEAD:flashinfer_trace/tests/references/test_gdn_prefill_qk8_v16_d128_k_last.py
     num_q_heads = 8
     num_k_heads = 8
     num_v_heads = 16
+========
+    num_q_heads = 4
+    num_k_heads = 4
+    num_v_heads = 8
+>>>>>>>> c416aa3747153fc94a0e906e82e0ac31c82b5905:flashinfer_trace/tests/references/test_gdn_prefill_qk4_v8_d128_k_last.py
     head_size = 128
     num_sab_heads = max(num_q_heads, num_v_heads)
 
@@ -195,9 +214,15 @@ def test_gdn_prefill_with_initial_state():
     device = torch.device("cuda")
     dtype = torch.bfloat16
 
+<<<<<<<< HEAD:flashinfer_trace/tests/references/test_gdn_prefill_qk8_v16_d128_k_last.py
     num_q_heads = 8
     num_k_heads = 8
     num_v_heads = 16
+========
+    num_q_heads = 4
+    num_k_heads = 4
+    num_v_heads = 8
+>>>>>>>> c416aa3747153fc94a0e906e82e0ac31c82b5905:flashinfer_trace/tests/references/test_gdn_prefill_qk4_v8_d128_k_last.py
     head_size = 128
     num_sab_heads = max(num_q_heads, num_v_heads)
 
@@ -318,9 +343,15 @@ def test_gdn_prefill_variable_seqlen():
     device = torch.device("cuda")
     dtype = torch.bfloat16
 
+<<<<<<<< HEAD:flashinfer_trace/tests/references/test_gdn_prefill_qk8_v16_d128_k_last.py
     num_q_heads = 8
     num_k_heads = 8
     num_v_heads = 16
+========
+    num_q_heads = 4
+    num_k_heads = 4
+    num_v_heads = 8
+>>>>>>>> c416aa3747153fc94a0e906e82e0ac31c82b5905:flashinfer_trace/tests/references/test_gdn_prefill_qk4_v8_d128_k_last.py
     head_size = 128
     num_sab_heads = max(num_q_heads, num_v_heads)
 
