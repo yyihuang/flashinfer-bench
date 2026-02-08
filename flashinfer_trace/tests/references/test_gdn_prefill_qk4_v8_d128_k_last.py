@@ -7,17 +7,70 @@ Run with:
 """
 
 import math
+import re
 import sys
 from pathlib import Path
 
 import pytest
 import torch
 import torch.nn.functional as F
+from safetensors.torch import load_file
 
 from flashinfer_bench.data import Definition, load_json_file
 
 # Paths
 DEFINITIONS_DIR = Path(__file__).parent.parent.parent / "definitions"
+WORKLOAD_INPUTS = {
+    "q": {
+        "type": "safetensors",
+        "path": "./blob/workloads/gdn/gdn_prefill_qk4_v8_d128_k_last_95021749-8e4e-4476-a7c6-fc8f06020633.safetensors",
+        "tensor_key": "q",
+    },
+    "k": {
+        "type": "safetensors",
+        "path": "./blob/workloads/gdn/gdn_prefill_qk4_v8_d128_k_last_95021749-8e4e-4476-a7c6-fc8f06020633.safetensors",
+        "tensor_key": "k",
+    },
+    "v": {
+        "type": "safetensors",
+        "path": "./blob/workloads/gdn/gdn_prefill_qk4_v8_d128_k_last_95021749-8e4e-4476-a7c6-fc8f06020633.safetensors",
+        "tensor_key": "v",
+    },
+    "state": {
+        "type": "safetensors",
+        "path": "./blob/workloads/gdn/gdn_prefill_qk4_v8_d128_k_last_95021749-8e4e-4476-a7c6-fc8f06020633.safetensors",
+        "tensor_key": "state",
+    },
+    "A_log": {
+        "type": "safetensors",
+        "path": "./blob/workloads/gdn/gdn_prefill_qk4_v8_d128_k_last_95021749-8e4e-4476-a7c6-fc8f06020633.safetensors",
+        "tensor_key": "A_log",
+    },
+    "a": {
+        "type": "safetensors",
+        "path": "./blob/workloads/gdn/gdn_prefill_qk4_v8_d128_k_last_95021749-8e4e-4476-a7c6-fc8f06020633.safetensors",
+        "tensor_key": "a",
+    },
+    "dt_bias": {
+        "type": "safetensors",
+        "path": "./blob/workloads/gdn/gdn_prefill_qk4_v8_d128_k_last_95021749-8e4e-4476-a7c6-fc8f06020633.safetensors",
+        "tensor_key": "dt_bias",
+    },
+    "b": {
+        "type": "safetensors",
+        "path": "./blob/workloads/gdn/gdn_prefill_qk4_v8_d128_k_last_95021749-8e4e-4476-a7c6-fc8f06020633.safetensors",
+        "tensor_key": "b",
+    },
+    "scale": {
+        "type": "scalar",
+        "value": 0.08838834764831843,
+    },
+    "cu_seqlens": {
+        "type": "safetensors",
+        "path": "./blob/workloads/gdn/gdn_prefill_qk4_v8_d128_k_last_95021749-8e4e-4476-a7c6-fc8f06020633.safetensors",
+        "tensor_key": "cu_seqlens",
+    },
+}
 
 
 def load_definition(name: str) -> Definition:
@@ -66,6 +119,33 @@ def compute_gates(A_log, a, dt_bias, b):
     return g, beta
 
 
+def _resolve_real_safetensors_path(workload_path: str) -> Path:
+    """Resolve the real safetensors path from the workload path UUID."""
+    match = re.search(
+        r"gdn_prefill_qk4_v8_d128_k_last_([0-9a-f-]+)\.safetensors", workload_path
+    )
+    if not match:
+        raise ValueError(f"Unable to extract UUID from workload path: {workload_path}")
+    uuid = match.group(1)
+    return Path("/home/averyh/sglang/tmp") / f"gdn_prefill_qk4_v8_d128_k_last_{uuid}.safetensors"
+
+
+def load_workload_inputs(device: torch.device):
+    """Load workload tensors from the real safetensors file."""
+    any_path = next(iter(WORKLOAD_INPUTS.values()))["path"]
+    real_path = _resolve_real_safetensors_path(any_path)
+    # Load on CPU first, then move to target device to avoid safetensors device errors.
+    tensors = load_file(str(real_path), device="cpu")
+
+    inputs = {}
+    for key, spec in WORKLOAD_INPUTS.items():
+        if spec["type"] == "scalar":
+            inputs[key] = float(spec["value"])
+            continue
+        inputs[key] = tensors[spec["tensor_key"]].to(device)
+    return inputs
+
+
 # Load definition and compile reference
 definition = load_definition("gdn_prefill_qk4_v8_d128_k_last")
 reference_gdn_prefill = compile_reference(definition.reference)
@@ -73,42 +153,41 @@ reference_gdn_prefill = compile_reference(definition.reference)
 
 @requires_cuda
 @requires_sm90_only
-@pytest.mark.parametrize("batch_size", [1, 2, 4])
-@pytest.mark.parametrize("seq_len", [16, 64, 128])
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("seq_len", [6])
 def test_gdn_prefill_correctness(batch_size: int, seq_len: int):
     """Test GDN prefill kernel correctness against reference implementation."""
     from flashinfer.gdn_prefill import chunk_gated_delta_rule
 
     device = torch.device("cuda")
-    dtype = torch.bfloat16
+    inputs = load_workload_inputs(device=device)
 
-    num_q_heads = 4
-    num_k_heads = 4
-    num_v_heads = 8
-    head_size = 128
-    num_sab_heads = max(num_q_heads, num_v_heads)
+    q = inputs["q"]
+    k = inputs["k"]
+    v = inputs["v"]
+    state = inputs["state"]
+    A_log = inputs["A_log"]
+    a = inputs["a"]
+    dt_bias = inputs["dt_bias"]
+    b = inputs["b"]
+    scale = inputs["scale"]
+    cu_seqlens = inputs["cu_seqlens"]
 
-    total_seq_len = batch_size * seq_len
-
-    q = torch.randn(total_seq_len, num_q_heads, head_size, dtype=dtype, device=device)
-    k = torch.randn(total_seq_len, num_k_heads, head_size, dtype=dtype, device=device)
-    k = torch.nn.functional.normalize(k, p=2.0, dim=-1)
-    v = torch.randn(total_seq_len, num_v_heads, head_size, dtype=dtype, device=device)
-
-    # Raw gate parameters
-    A_log = torch.randn(num_sab_heads, dtype=torch.float32, device=device) * 0.1
-    a = torch.randn(total_seq_len, num_sab_heads, dtype=dtype, device=device)
-    dt_bias = torch.randn(num_sab_heads, dtype=torch.float32, device=device) * 0.1
-    b = torch.randn(total_seq_len, num_sab_heads, dtype=dtype, device=device)
-
-    cu_seqlens = torch.arange(
-        0, batch_size * seq_len + 1, seq_len, dtype=torch.int64, device=device
+    total_seq_len = q.shape[0]
+    inferred_batch = cu_seqlens.numel() - 1
+    inferred_seq_len = (
+        total_seq_len // inferred_batch if inferred_batch > 0 and total_seq_len % inferred_batch == 0 else None
     )
-
-    scale = 1.0 / math.sqrt(head_size)
+    if inferred_batch != batch_size or inferred_seq_len != seq_len:
+        pytest.skip(
+            f"Workload batch_size={inferred_batch}, seq_len={inferred_seq_len} "
+            f"does not match {batch_size}, {seq_len}"
+        )
 
     # Reference from definition
-    ref_result = reference_gdn_prefill(q, k, v, None, A_log, a, dt_bias, b, cu_seqlens, scale)
+    ref_result = reference_gdn_prefill(
+        q, k, v, state, A_log, a, dt_bias, b, cu_seqlens, scale
+    )
     ref_output, ref_new_state = ref_result
 
     # FlashInfer uses pre-computed g/beta

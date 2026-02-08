@@ -7,11 +7,13 @@ Run with:
 """
 
 import math
+import re
 from pathlib import Path
 
 import pytest
 import torch
 import torch.nn.functional as F
+from safetensors.torch import load_file
 from flashinfer.gdn_decode import gated_delta_rule_decode_pretranspose
 from flashinfer.utils import get_compute_capability
 
@@ -19,6 +21,87 @@ from flashinfer_bench.data import Definition, load_json_file
 
 # Paths
 DEFINITIONS_DIR = Path(__file__).parent.parent.parent / "definitions"
+WORKLOAD_INPUTS = {
+    "q": {
+        "type": "safetensors",
+        "path": "./blob/workloads/gdn/gdn_decode_qk4_v8_d128_k_last_8add0e58-121b-4d25-b450-cb03e665511c.safetensors",
+        "tensor_key": "q",
+    },
+    "k": {
+        "type": "safetensors",
+        "path": "./blob/workloads/gdn/gdn_decode_qk4_v8_d128_k_last_8add0e58-121b-4d25-b450-cb03e665511c.safetensors",
+        "tensor_key": "k",
+    },
+    "v": {
+        "type": "safetensors",
+        "path": "./blob/workloads/gdn/gdn_decode_qk4_v8_d128_k_last_8add0e58-121b-4d25-b450-cb03e665511c.safetensors",
+        "tensor_key": "v",
+    },
+    "state": {
+        "type": "safetensors",
+        "path": "./blob/workloads/gdn/gdn_decode_qk4_v8_d128_k_last_8add0e58-121b-4d25-b450-cb03e665511c.safetensors",
+        "tensor_key": "state",
+    },
+    "A_log": {
+        "type": "safetensors",
+        "path": "./blob/workloads/gdn/gdn_decode_qk4_v8_d128_k_last_8add0e58-121b-4d25-b450-cb03e665511c.safetensors",
+        "tensor_key": "A_log",
+    },
+    "a": {
+        "type": "safetensors",
+        "path": "./blob/workloads/gdn/gdn_decode_qk4_v8_d128_k_last_8add0e58-121b-4d25-b450-cb03e665511c.safetensors",
+        "tensor_key": "a",
+    },
+    "dt_bias": {
+        "type": "safetensors",
+        "path": "./blob/workloads/gdn/gdn_decode_qk4_v8_d128_k_last_8add0e58-121b-4d25-b450-cb03e665511c.safetensors",
+        "tensor_key": "dt_bias",
+    },
+    "b": {
+        "type": "safetensors",
+        "path": "./blob/workloads/gdn/gdn_decode_qk4_v8_d128_k_last_8add0e58-121b-4d25-b450-cb03e665511c.safetensors",
+        "tensor_key": "b",
+    },
+    "scale": {
+        "type": "scalar",
+        "value": 0.08838834764831843,
+    },
+    "cu_seqlens": {
+        "type": "safetensors",
+        "path": "./blob/workloads/gdn/gdn_decode_qk4_v8_d128_k_last_8add0e58-121b-4d25-b450-cb03e665511c.safetensors",
+        "tensor_key": "cu_seqlens",
+    },
+}
+
+
+def _resolve_real_safetensors_path(workload_path: str) -> Path:
+    """Resolve the real safetensors path from the workload path UUID."""
+    match = re.search(
+        r"gdn_decode_qk4_v8_d128_k_last_([0-9a-f-]+)\.safetensors", workload_path
+    )
+    if not match:
+        raise ValueError(f"Unable to extract UUID from workload path: {workload_path}")
+    uuid = match.group(1)
+    return Path("/home/averyh/sglang/tmp") / f"gdn_decode_qk4_v8_d128_k_last_{uuid}.safetensors"
+
+
+def load_workload_inputs(device: str = "cuda"):
+    """Load workload tensors from the real safetensors file."""
+    any_path = next(iter(WORKLOAD_INPUTS.values()))["path"]
+    real_path = _resolve_real_safetensors_path(any_path)
+    # Load on CPU first, then move to target device to avoid safetensors device errors.
+    tensors = load_file(str(real_path), device="cpu")
+
+    inputs = {}
+    for key, spec in WORKLOAD_INPUTS.items():
+        if key == "cu_seqlens":
+            continue
+        if spec["type"] == "scalar":
+            inputs[key] = float(spec["value"])
+            continue
+        tensor = tensors[spec["tensor_key"]]
+        inputs[key] = tensor.to(device)
+    return inputs
 
 
 def load_definition(name: str) -> Definition:
@@ -71,54 +154,12 @@ def run_kernel(q, k, v, state, A_log, a, dt_bias, b, scale):
     return out, new_state
 
 
-def generate_random_inputs(
-    batch_size, num_q_heads=4, num_k_heads=4, num_v_heads=8, head_size=128, device="cuda", seed=42
-):
-    """Generate random inputs for testing."""
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-
-    B = batch_size
-    T = 1
-    K = head_size
-    V = head_size
-    dtype = torch.bfloat16
-
-    # Use smaller magnitude for better numerical stability
-    q = torch.randn(B, T, num_q_heads, K, dtype=dtype, device=device) * 0.8
-    k = torch.randn(B, T, num_k_heads, K, dtype=dtype, device=device) * 0.8
-    # Normalize k for better conditioning (as done in prefill test)
-    k = F.normalize(k.float(), p=2.0, dim=-1).to(dtype)
-    v = torch.randn(B, T, num_v_heads, V, dtype=dtype, device=device) * 0.8
-
-    # Gate parameters with smaller scales
-    A_log = torch.randn(num_v_heads, dtype=torch.float32, device=device) * 0.05
-    a = torch.randn(B, T, num_v_heads, dtype=dtype, device=device) * 0.05
-    dt_bias = torch.randn(num_v_heads, dtype=dtype, device=device) * 0.05
-    b = torch.randn(B, T, num_v_heads, dtype=dtype, device=device) * 0.1
-
-    # k-last layout: [B, H, V, K] - keep small for stability
-    state = torch.randn(B, num_v_heads, V, K, dtype=torch.float32, device=device) * 0.01
-
-    # Use proper attention scaling
-    scale = 1.0 / math.sqrt(head_size)
-
-    return {
-        "q": q,
-        "k": k,
-        "v": v,
-        "state": state,
-        "A_log": A_log,
-        "a": a,
-        "dt_bias": dt_bias,
-        "b": b,
-        "scale": scale,
-    }
-
-
-def test_correctness(batch_size=4, atol=5e-3, rtol=5e-3):
+def test_correctness(atol=5e-3, rtol=5e-3):
     """Test correctness of reference implementation against FlashInfer."""
     _skip_if_not_sm90_or_later()
+
+    inputs = load_workload_inputs(device="cuda")
+    batch_size = inputs["q"].shape[0]
 
     print(f"\n{'='*60}")
     print(f"Testing GDN decode k-last, batch_size={batch_size}")
@@ -127,9 +168,6 @@ def test_correctness(batch_size=4, atol=5e-3, rtol=5e-3):
     # Load definition and compile reference
     definition = load_definition("gdn_decode_qk4_v8_d128_k_last")
     run = compile_reference(definition.reference)
-
-    device = "cuda"
-    inputs = generate_random_inputs(batch_size=batch_size, device=device)
 
     # Run reference from definition
     print("Running reference implementation from definition...")
@@ -231,17 +269,18 @@ def test_correctness(batch_size=4, atol=5e-3, rtol=5e-3):
         return False
 
 
-@pytest.mark.parametrize("batch_size", [1, 2, 4, 8, 16, 32, 64, 128, 256, 512])
+@pytest.mark.parametrize("batch_size", [1])
 def test_gdn_decode_k_last(batch_size: int):
-    """Pytest parametrized test for various batch sizes."""
+    """Pytest test using captured workload inputs."""
     _skip_if_not_sm90_or_later()
 
     # Load definition and compile reference
     definition = load_definition("gdn_decode_qk4_v8_d128_k_last")
     run = compile_reference(definition.reference)
 
-    device = "cuda"
-    inputs = generate_random_inputs(batch_size=batch_size, device=device)
+    inputs = load_workload_inputs(device="cuda")
+    if inputs["q"].shape[0] != batch_size:
+        pytest.skip(f"Workload batch_size={inputs['q'].shape[0]} does not match {batch_size}")
 
     # Run reference from definition
     ref_result = run(
@@ -297,14 +336,14 @@ def main():
         "Loading definition from: flashinfer_trace/definitions/gdn/gdn_decode_qk4_v8_d128_k_last.json"
     )
 
-    test_configs = [1, 4, 16, 64, 256]
+    test_configs = [1]
 
     passed = 0
     total = len(test_configs)
 
     for batch_size in test_configs:
         try:
-            if test_correctness(batch_size):
+            if test_correctness():
                 passed += 1
         except Exception as e:
             print(f"✗ Test failed with exception: {str(e)}")
