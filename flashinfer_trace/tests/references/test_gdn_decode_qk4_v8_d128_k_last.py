@@ -14,11 +14,13 @@ import torch
 import torch.nn.functional as F
 from flashinfer.gdn_decode import gated_delta_rule_decode_pretranspose
 from flashinfer.utils import get_compute_capability
+from safetensors.torch import load_file
 
 from flashinfer_bench.data import Definition, load_json_file
 
 # Paths
 DEFINITIONS_DIR = Path(__file__).parent.parent.parent / "definitions"
+SAFETENSORS_DIR = Path("/home/averyh/sglang/tmp")
 
 
 def load_definition(name: str) -> Definition:
@@ -290,6 +292,116 @@ def test_gdn_decode_k_last(batch_size: int):
     print(f"✓ GDN decode k-last test passed (batch_size={batch_size})")
 
 
+def load_real_workload_inputs(
+    uuid: str,
+    batch_size: int,
+    scale: float,
+    num_q_heads=4,
+    num_k_heads=4,
+    num_v_heads=8,
+    head_size=128,
+    device="cuda",
+    seed=42,
+):
+    """Load inputs from a real workload: random for q/k/v/state, safetensors for gate params."""
+    safetensors_path = SAFETENSORS_DIR / f"gdn_decode_qk4_v8_d128_k_last_{uuid}.safetensors"
+    tensors = load_file(str(safetensors_path))
+
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+
+    B, T = batch_size, 1
+    K = V = head_size
+    dtype = torch.bfloat16
+
+    q = torch.randn(B, T, num_q_heads, K, dtype=dtype, device=device) * 0.8
+    k = torch.randn(B, T, num_k_heads, K, dtype=dtype, device=device) * 0.8
+    k = F.normalize(k.float(), p=2.0, dim=-1).to(dtype)
+    v = torch.randn(B, T, num_v_heads, V, dtype=dtype, device=device) * 0.8
+    state = torch.randn(B, num_v_heads, V, K, dtype=torch.float32, device=device) * 0.01
+
+    a = tensors["a"].to(device)
+    b = tensors["b"].to(device)
+    if a.ndim == 2:
+        a = a.unsqueeze(1)
+    if b.ndim == 2:
+        b = b.unsqueeze(1)
+
+    return {
+        "q": q,
+        "k": k,
+        "v": v,
+        "state": state,
+        "A_log": tensors["A_log"].to(device),
+        "a": a,
+        "dt_bias": tensors["dt_bias"].to(device),
+        "b": b,
+        "scale": scale,
+    }
+
+
+def test_gdn_decode_k_last_real_workload():
+    """Test with real workload gate parameters from safetensors dump."""
+    _skip_if_not_sm90_or_later()
+
+    uuid = "6a12d5ee-6449-47b5-9b19-965c796d8f0e"
+    batch_size = 32
+    scale = 0.08838834764831843
+
+    safetensors_path = SAFETENSORS_DIR / f"gdn_decode_qk4_v8_d128_k_last_{uuid}.safetensors"
+    if not safetensors_path.exists():
+        pytest.skip(f"Safetensors file not found: {safetensors_path}")
+
+    definition = load_definition("gdn_decode_qk4_v8_d128_k_last")
+    run = compile_reference(definition.reference)
+
+    device = "cuda"
+    inputs = load_real_workload_inputs(uuid, batch_size, scale, device=device)
+
+    ref_output, ref_new_state = run(
+        inputs["q"].clone(),
+        inputs["k"].clone(),
+        inputs["v"].clone(),
+        inputs["state"].clone(),
+        inputs["A_log"].clone(),
+        inputs["a"].clone(),
+        inputs["dt_bias"].clone(),
+        inputs["b"].clone(),
+        inputs["scale"],
+    )
+
+    kernel_output, kernel_new_state = run_kernel(
+        inputs["q"].clone(),
+        inputs["k"].clone(),
+        inputs["v"].clone(),
+        inputs["state"].clone(),
+        inputs["A_log"].clone(),
+        inputs["a"].clone(),
+        inputs["dt_bias"].clone(),
+        inputs["b"].clone(),
+        inputs["scale"],
+    )
+
+    atol, rtol = 1e-2, 1e-2
+
+    torch.testing.assert_close(
+        kernel_output,
+        ref_output,
+        atol=atol,
+        rtol=rtol,
+        msg=f"Output mismatch for real workload (uuid={uuid})",
+    )
+    torch.testing.assert_close(
+        kernel_new_state,
+        ref_new_state,
+        atol=atol,
+        rtol=rtol,
+        msg=f"State mismatch for real workload (uuid={uuid})",
+    )
+
+    print(f"✓ GDN decode k-last real workload test passed (uuid={uuid}, batch_size={batch_size})")
+
+
 def main():
     """Run tests."""
     print("Testing GDN Decode K-Last Reference Implementation")
@@ -323,4 +435,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+    test_gdn_decode_k_last_real_workload()
