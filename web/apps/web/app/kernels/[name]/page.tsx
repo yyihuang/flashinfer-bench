@@ -8,6 +8,7 @@ import { AxesSignatureSection } from "./axes-sig"
 import { ConstraintsSection } from "./constraints"
 import { DefinitionReference } from "./reference"
 import { SolutionsSection } from "./solutions"
+import { DefinitionTags } from "./tags"
 
 export async function generateStaticParams() {
   const definitions = await getAllDefinitions()
@@ -64,7 +65,18 @@ export default async function TraceDetailPage({
 
       <div className="container py-8">
         <div className="space-y-8">
-          <p className="text-muted-foreground">{definition.description}</p>
+          <div className="space-y-3">
+            {definition.description && (
+              <p className="text-muted-foreground">{definition.description}</p>
+            )}
+          </div>
+
+          {definition.tags && definition.tags.length > 0 && (
+            <section id="tags">
+              <h2 className="text-2xl font-semibold mb-4">Tags</h2>
+              <DefinitionTags definition={definition} />
+            </section>
+          )}
 
           <AxesSignatureSection definition={definition} />
 
