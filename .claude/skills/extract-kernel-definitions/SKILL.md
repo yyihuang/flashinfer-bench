@@ -504,8 +504,9 @@ When executing this skill:
 
 8. **Submit one GitHub PR per definition** (PR 1 in the two-PR workflow):
 
-   Each PR bundles the definition JSON, a reference test, and the model_coverage.mdx update
-   together. Use git worktrees for parallel submission — one worktree and one agent per definition:
+   Each PR bundles three things: the definition JSON, a reference test, and the model_coverage.mdx
+   update. The PR **description must include the full `pytest -v` output** from running the
+   reference test — this is mandatory for review. Use git worktrees for parallel submission — one worktree and one agent per definition:
 
    ```bash
    # Create one worktree per definition (do this up front for all definitions)

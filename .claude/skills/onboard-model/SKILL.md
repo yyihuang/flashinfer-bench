@@ -25,6 +25,7 @@ Phase 3: Workload collection (only when FlashInfer has the kernel)
                                                   then collect-workloads (sglang mode)
 Phase 4: Submit PRs (per definition, not batched)
           ├─ PR 1 → flashinfer-bench (GitHub): definition JSON + reference tests + model_coverage.mdx
+          │          PR description must include reference test execution results (pytest -v output)
           └─ PR 2 → flashinfer-ai/flashinfer-trace (HuggingFace): baseline solution + workloads + traces + def JSON + reference tests
 ```
 
@@ -452,7 +453,7 @@ with all definitions processed in parallel using git worktrees.
 
 | # | Target repo | Content | Trigger |
 |---|-------------|---------|---------|
-| 1 | `flashinfer-ai/flashinfer-bench` (GitHub) | definition JSON + reference tests + `docs/model_coverage.mdx` | after Phase 2 |
+| 1 | `flashinfer-ai/flashinfer-bench` (GitHub) | definition JSON + reference tests + `docs/model_coverage.mdx`; **PR description must include `pytest -v` output** | after Phase 2 |
 | 2 | `flashinfer-ai/flashinfer-trace` (HuggingFace) | baseline solution + workload JSONL + safetensors traces + def JSON + reference tests | after PR 1 is open |
 
 Do **not** batch multiple definitions into a single PR. Each definition must be independently
