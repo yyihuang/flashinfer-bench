@@ -31,10 +31,10 @@ This document tracks which kernels are supported in FlashInfer-Bench for each mo
 | Qwen3 32B | GQA + Dense | 🟡 Partial |
 | Qwen3 235B A22B | GQA + MoE | 🟡 Partial |
 | Qwen3 Next 80B A3B | GDN + GQA + MoE | 🟡 Partial |
-| Kimi K2 | MLA + MoE | 🟡 Partial |
+| Kimi K2 | MLA + MoE | 🟡 Partial (9/15) |
 | Phi-4 14B | GQA + Dense | 🟡 Partial |
 | Llama 3.1 405B | GQA + Dense | 🟡 Partial |
-| Llama 4 Scout 17B-16E | GQA + MoE | 🟡 Partial |
+| Llama 4 Scout 17B-16E | GQA + MoE | 🟡 Partial (7/10) |
 | Llama 4 Maverick 17B-128E | GQA + MoE | 🟡 Partial |
 | Mistral Small 3.1 24B | GQA + Dense | 🟡 Partial |
 | GLM-4.6 | GQA + Dense | ❌ Not covered |
@@ -481,18 +481,19 @@ Kimi K2 uses DeepSeek V3-style MLA with the same kv_lora_rank=512 and qk_rope_he
 | `fused_add_rmsnorm_h7168` | rmsnorm | ✅ |
 | `rmsnorm_h1536` | rmsnorm | ✅ |
 | `rmsnorm_h512` | rmsnorm | ✅ |
-| `mla_paged_prefill_causal_h8_ckv512_kpe64_ps1` | mla_paged TP=8 | ❌ |
+| `mla_paged_prefill_causal_h8_ckv512_kpe64_ps1` | mla_paged TP=8 | 🟡 |
 | `mla_paged_prefill_causal_h8_ckv512_kpe64_ps64` | mla_paged TP=8 | ❌ |
-| `mla_paged_decode_h8_ckv512_kpe64_ps1` | mla_paged TP=8 | ❌ |
+| `mla_paged_decode_h8_ckv512_kpe64_ps1` | mla_paged TP=8 | 🟡 |
 | `mla_paged_decode_h8_ckv512_kpe64_ps64` | mla_paged TP=8 | ❌ |
-| `mla_ragged_prefill_causal_h8_qk192_vo128` | mla_ragged | ❌ |
+| `mla_ragged_prefill_causal_h8_qk192_vo128` | mla_ragged | 🟡 |
 | `moe_fp8_block_scale_ds_routing_topk8_ng1_kg1_e384_h7168_i2048` | moe EP=1 | 🟡 |
-| `moe_fp8_block_scale_ds_routing_topk8_ng?_kg?_e96_h7168_i2048` | moe EP=4 | ❌ |
+| `moe_fp8_block_scale_ds_routing_topk8_ng1_kg1_e48_h7168_i2048` | moe EP=8 (8×B200) | 🟡 |
+| `moe_fp8_block_scale_ds_routing_topk8_ng1_kg1_e96_h7168_i2048` | moe EP=4 (cookbook) | ❌ |
 | `top_k_sampling_from_probs_v160000` | sampling | ❌ |
 | `top_k_top_p_sampling_from_probs_v160000` | sampling | ❌ |
 | `top_p_sampling_from_probs_v160000` | sampling | ❌ |
 
-**Coverage**: 5 / 14 definitions present. RMSNorm definitions are shared with DeepSeek V3 (same hidden=7168 and sub-module dims). MoE EP=1 definition added. All MLA defs require new h=8 variants; MoE EP=4 variant (e=96) and sampling (v=160000) still missing.
+**Coverage**: 9 / 15 definitions present. MLA h=8 definitions (decode, prefill paged, prefill ragged) and MoE EP=8 (e=48, for 8×B200) added. ps64 MLA variants and sampling (v=160000) still missing. MoE EP=4 (e=96, cookbook multi-node config) also missing.
 
 ---
 
@@ -556,11 +557,11 @@ Kimi K2 uses DeepSeek V3-style MLA with the same kv_lora_rank=512 and qk_rope_he
 |-----------|---------|:------:|
 | `rmsnorm_h5120` | rmsnorm | 🟡 |
 | `fused_add_rmsnorm_h5120` | rmsnorm | 🟡 |
-| `gqa_paged_prefill_causal_h5_kv1_d128_ps1` | gqa_paged TP=8 | ❌ |
+| `gqa_paged_prefill_causal_h5_kv1_d128_ps1` | gqa_paged TP=8 | 🟡 |
 | `gqa_paged_prefill_causal_h5_kv1_d128_ps64` | gqa_paged TP=8 | ❌ |
-| `gqa_paged_decode_h5_kv1_d128_ps1` | gqa_paged TP=8 | ❌ |
+| `gqa_paged_decode_h5_kv1_d128_ps1` | gqa_paged TP=8 | 🟡 |
 | `gqa_paged_decode_h5_kv1_d128_ps64` | gqa_paged TP=8 | ❌ |
-| `gqa_ragged_prefill_causal_h5_kv1_d128` | gqa_ragged TP=8 | ❌ |
+| `gqa_ragged_prefill_causal_h5_kv1_d128` | gqa_ragged TP=8 | 🟡 |
 | MoE experts (top-1, 16 experts, standard routing) | moe | — |
 | `trtllm_fp4_block_scale_moe_topk1_e16_h5120_i8192` | moe (TRT-LLM FP4, Llama4 routing) | 🟡 |
 | `trtllm_fp4_block_scale_routed_moe_topk1_e16_h5120_i8192` | moe (TRT-LLM FP4 routed, Llama4 routing) | 🟡 |
@@ -569,7 +570,7 @@ Kimi K2 uses DeepSeek V3-style MLA with the same kv_lora_rank=512 and qk_rope_he
 | `top_k_top_p_sampling_from_probs_v202048` | sampling | ❌ |
 | `top_p_sampling_from_probs_v202048` | sampling | ❌ |
 
-**Coverage**: 4 / 10 referenced definitions present. rmsnorm h5120 shared with Qwen3 14B. TRT-LLM FP4 + FP8 MoE kernels added (top-1, 16 experts, Llama4 routing). Missing: all GQA defs (h=5 per device), sampling v202048.
+**Coverage**: 7 / 10 referenced definitions present. GQA ps1 definitions (decode, prefill paged, prefill ragged) added for TP=8 (h=5, kv=1). ps64 variants and sampling v202048 still missing.
 
 ---
 
